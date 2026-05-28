@@ -35,6 +35,17 @@ class StrategyType(Enum):
     KENGQI = "坑里起好货"          # 填坑战法
     DUIchen = "对称VA"             # 对称战法
 
+    # 逃顶信号
+    S1 = "S1"                    # 初级逃顶（丑陋大绿帽）
+    S2 = "S2"                    # 确认逃顶（MACD顶背离）
+    S3 = "S3"                    # 最后逃生（反抽无力）
+
+    # 主力阶段
+    XISHOU = "吸筹"               # 麒麟会吸筹阶段
+    LASHENG = "拉升"              # 麒麟会拉升阶段
+    PAIFA = "派发"                # 麒麟会派发阶段
+    LUOLUO = "回落"               # 麒麟会回落阶段
+
 
 @dataclass
 class StrategySignal:
@@ -895,10 +906,288 @@ def detect_all_strategies(ts_code: str, days: int = 120) -> List[StrategySignal]
         if signal:
             signals.append(signal)
 
+        # S1 逃顶
+        signal = detect_s1(klines, i)
+        if signal:
+            signals.append(signal)
+
     # 按日期排序，最新的在前面
     signals.sort(key=lambda x: x.trade_date, reverse=True)
 
     return signals
+
+
+def detect_s1(klines: List[Dict], index: int) -> Optional[StrategySignal]:
+    """
+    检测 S1 初级逃顶信号
+
+    触发条件：
+    1. 近期流畅上涨（20日内涨幅 > 15%，位于高位）
+    2. 丑陋大绿帽：放量阴线或假阴真阳，收盘价接近当日低点
+    3. 量能异常（放量 > 前日 1.5 倍）
+    """
+    if index < 20:
+        return None
+
+    today = klines[index]
+
+    # 近期高点
+    recent_high = max(k['high'] for k in klines[index - 19:index + 1])
+    recent_low_20 = min(k['low'] for k in klines[index - 19:index])
+
+    # 流畅上涨条件：20日内涨幅 > 15%
+    up_pct = (recent_high - recent_low_20) / recent_low_20
+    if up_pct < 0.15:
+        return None
+
+    # 当前位于高位（距20日高点 < 10%）
+    if today['close'] < recent_high * 0.90:
+        return None
+
+    # 丑陋大绿帽：放量阴线 或 假阴真阳
+    is_ugly = (
+        today['is_fangliang_yinxian'] or
+        (today['is_jiayin'] and today['vol'] > klines[index - 1]['vol'] * 1.5)
+    )
+    if not is_ugly:
+        return None
+
+    # 收盘价接近当日低点（绿帽实体大）
+    day_range = today['high'] - today['low']
+    if day_range > 0:
+        close_position = (today['close'] - today['low']) / day_range
+    else:
+        close_position = 0.5
+
+    if close_position > 0.3:
+        return None
+
+    return StrategySignal(
+        ts_code=today['ts_code'],
+        trade_date=today['trade_date'],
+        strategy=StrategyType.S1,
+        confidence=0.85,
+        description=f"S1逃顶 20日涨{up_pct*100:.0f}% 放量阴线 收盘距低点{close_position*100:.0f}%",
+        details={
+            'up_pct': round(up_pct * 100, 2),
+            'close_position': round(close_position, 2),
+            'vol_ratio': round(today['vol'] / klines[index - 1]['vol'], 2) if klines[index - 1]['vol'] > 0 else 0,
+        },
+        action="SELL",
+        stop_loss=today['low'],
+    )
+
+
+def detect_s2(klines: List[Dict], index: int,
+              dif_list: Optional[List[float]] = None) -> Optional[StrategySignal]:
+    """
+    检测 S2 确认逃顶信号（MACD顶背离）
+
+    触发条件：
+    1. 股价挑战前高（close >= 近期高点 * 0.97）
+    2. MACD 顶背离（价格创新高，DIF未创新高）
+
+    dif_list: 可选的外部 MACD DIF 序列，避免重复计算
+    """
+    if index < 30:
+        return None
+
+    today = klines[index]
+
+    # 找前高（过去30天内的最高点，排除最近5天）
+    prev_high = max(k['high'] for k in klines[index - 29:index - 4])
+    prev_high_idx = next(
+        i for i in range(index - 29, index - 4)
+        if klines[i]['high'] == prev_high
+    )
+
+    # 当前价格接近或超过前高
+    if today['close'] < prev_high * 0.97:
+        return None
+
+    # 计算 DIF（如果没有外部传入）
+    if dif_list is None or len(dif_list) < index + 1:
+        dif_list = _calc_dif(klines)
+
+    if not dif_list or len(dif_list) < index + 1:
+        return None
+
+    # 顶背离：价格创新高，DIF 未创新高
+    current_dif = dif_list[index]
+    prev_dif = dif_list[prev_high_idx]
+
+    if today['close'] > klines[prev_high_idx]['close'] and current_dif < prev_dif * 0.98:
+        return StrategySignal(
+            ts_code=today['ts_code'],
+            trade_date=today['trade_date'],
+            strategy=StrategyType.S2,
+            confidence=0.8,
+            description="S2顶背离 价新高DIF未新高",
+            details={
+                'prev_high': prev_high,
+                'prev_high_date': klines[prev_high_idx]['trade_date'],
+                'current_dif': round(current_dif, 4),
+                'prev_dif': round(prev_dif, 4),
+            },
+            action="SELL",
+            stop_loss=klines[prev_high_idx]['low'],
+        )
+
+    return None
+
+
+def _calc_dif(klines: List[Dict]) -> List[float]:
+    """
+    简化版 MACD DIF 计算（用于 S2 顶背离检测）
+    EMA12 - EMA26
+    """
+    if len(klines) < 26:
+        return []
+
+    closes = [k['close'] for k in klines]
+
+    def ema(data, period):
+        multiplier = 2 / (period + 1)
+        result = [data[0]]
+        for price in data[1:]:
+            result.append(price * multiplier + result[-1] * (1 - multiplier))
+        return result
+
+    ema12 = ema(closes, 12)
+    ema26 = ema(closes, 26)
+    dif = [ema12[i] - ema26[i] for i in range(len(closes))]
+    return dif
+
+
+def detect_s3(klines: List[Dict], index: int) -> Optional[StrategySignal]:
+    """
+    检测 S3 最后逃生信号（简化版）
+
+    触发条件：
+    1. 之前有 S1 或高位放量阴线
+    2. 近期反弹到 S1 高点下沿但量能不足
+    3. 无法突破，出现滞涨
+    """
+    if index < 15:
+        return None
+
+    today = klines[index]
+
+    # 找近期 S1 或放量阴线的位置（过去15天内）
+    s1_index = None
+    for i in range(index - 14, index):
+        if klines[i]['is_fangliang_yinxian'] and klines[i]['close'] < klines[i]['open']:
+            s1_index = i
+            break
+
+    if s1_index is None:
+        return None
+
+    s1_high = klines[s1_index]['high']
+    s1_open = klines[s1_index]['open']
+
+    # 当前价格反弹到 S1 开盘价附近但未能突破 S1 高点
+    if not (s1_open * 0.95 <= today['close'] <= s1_high * 1.02):
+        return None
+
+    # 反弹量能不足（小于 S1 当天量能的 70%）
+    if today['vol'] > klines[s1_index]['vol'] * 0.7:
+        return None
+
+    # 当日涨幅受限（< 2%）
+    if today['pct_chg'] > 2:
+        return None
+
+    return StrategySignal(
+        ts_code=today['ts_code'],
+        trade_date=today['trade_date'],
+        strategy=StrategyType.S3,
+        confidence=0.7,
+        description=f"S3最后逃生 反弹至S1下沿 量能不足",
+        details={
+            's1_date': klines[s1_index]['trade_date'],
+            's1_high': s1_high,
+            'rebound_pct': round((today['close'] - klines[s1_index]['close']) / klines[s1_index]['close'] * 100, 2),
+            'vol_ratio': round(today['vol'] / klines[s1_index]['vol'], 2),
+        },
+        action="SELL",
+        stop_loss=klines[s1_index]['low'],
+    )
+
+
+def analyze_kirin_phase(klines: List[Dict]) -> Dict[str, Any]:
+    """
+    分析麒麟会四阶段（吸→拉→派→落）
+
+    基于最近 30 天量价特征判断当前最可能阶段
+    """
+    if len(klines) < 30:
+        return {"phase": "UNKNOWN", "confidence": 0}
+
+    recent = klines[-30:]
+    closes = [k['close'] for k in recent]
+    vols = [k['vol'] for k in recent]
+    avg_vol = sum(vols) / len(vols)
+
+    # 1. 趋势方向
+    first_half = closes[:15]
+    second_half = closes[15:]
+    trend = "UP" if second_half[-1] > first_half[0] else "DOWN"
+
+    # 2. 量价关系
+    red_vol = sum(k['vol'] for k in recent if k['is_rise'])
+    green_vol = sum(k['vol'] for k in recent if not k['is_rise'])
+    red_days = sum(1 for k in recent if k['is_rise'])
+    green_days = 30 - red_days
+
+    red_avg = red_vol / red_days if red_days > 0 else 0
+    green_avg = green_vol / green_days if green_days > 0 else 0
+
+    # 3. 阶段判定
+    phase = "UNKNOWN"
+    confidence = 0.5
+
+    # 吸筹：低位、缩量震荡、红肥绿瘦（阳线量能 > 阴线）
+    is_low = min(closes) <= max(closes) * 0.85
+    is_shrink = avg_vol < sum(klines[i]['vol'] for i in range(-60, -30)) / 30 if len(klines) >= 60 else False
+    if is_low and red_avg > green_avg * 1.2:
+        phase = "吸筹"
+        confidence = 0.75
+
+    # 拉升：放量、连续上涨、趋势向上
+    up_days = sum(1 for i in range(1, len(recent)) if recent[i]['close'] > recent[i-1]['close'])
+    if trend == "UP" and avg_vol > (sum(klines[i]['vol'] for i in range(-60, -30)) / 30 if len(klines) >= 60 else avg_vol) * 1.3 and up_days >= 18:
+        phase = "拉升"
+        confidence = 0.8
+
+    # 派发：高位、放量滞涨、绿肥红瘦
+    is_high = closes[-1] >= max(closes[:20]) * 0.95
+    if is_high and green_avg > red_avg * 1.1 and abs(closes[-1] - closes[0]) / closes[0] < 0.05:
+        phase = "派发"
+        confidence = 0.75
+
+    # 回落：缩量下跌、无承接
+    if trend == "DOWN" and avg_vol < (sum(klines[i]['vol'] for i in range(-60, -30)) / 30 if len(klines) >= 60 else avg_vol) * 0.8 and up_days < 10:
+        phase = "回落"
+        confidence = 0.7
+
+    phase_map = {
+        "吸筹": StrategyType.XISHOU,
+        "拉升": StrategyType.LASHENG,
+        "派发": StrategyType.PAIFA,
+        "回落": StrategyType.LUOLUO,
+        "UNKNOWN": None,
+    }
+
+    return {
+        "phase": phase,
+        "confidence": confidence,
+        "strategy_type": phase_map.get(phase),
+        "trend": trend,
+        "red_avg_vol": round(red_avg, 2),
+        "green_avg_vol": round(green_avg, 2),
+        "avg_vol": round(avg_vol, 2),
+    }
 
 
 def get_latest_signal(ts_code: str, days: int = 120) -> Optional[StrategySignal]:

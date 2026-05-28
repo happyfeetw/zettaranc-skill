@@ -9,6 +9,7 @@ from modules.strategies import (
     detect_b1, detect_b2, detect_b3, detect_sb1,
     detect_changan, detect_sifen_zhiyi_sanyin, detect_nana,
     detect_yidong_dilian, detect_pinghang, detect_kengqi, detect_duichen_va,
+    detect_s1, detect_s2, detect_s3, analyze_kirin_phase,
     detect_all_strategies, get_latest_signal,
 )
 from tests.conftest import make_kline_row, generate_uptrend_klines
@@ -177,6 +178,59 @@ class TestGetLatestSignal:
     def test_no_signal(self, temp_db, db_conn):
         signal = get_latest_signal("000001.SZ")
         assert signal is None
+
+
+class TestDetectS1:
+    def test_insufficient_data(self):
+        klines = generate_uptrend_klines(n=10)
+        assert detect_s1(klines, 9) is None
+
+    def test_s1_exit(self):
+        """构造 S1 逃顶场景：流畅上涨后出现丑陋大绿帽"""
+        klines = generate_uptrend_klines(n=30, start_price=100.0, daily_pct=1.0)
+        today = klines[-1]
+        # 丑陋大绿帽：放量阴线，收盘价接近低点
+        today["close"] = 125.0
+        today["open"] = 135.0
+        today["high"] = 136.0
+        today["low"] = 124.0
+        today["pct_chg"] = -7.0
+        today["vol"] = 50000
+        today["is_rise"] = False
+        today["is_yinxian"] = True
+        today["is_fangliang_yinxian"] = True
+        today["is_jiayin"] = False
+
+        signal = detect_s1(klines, len(klines) - 1)
+        assert signal is not None
+        assert signal.strategy == StrategyType.S1
+        assert signal.action == "SELL"
+
+
+class TestDetectS2:
+    def test_insufficient_data(self):
+        klines = generate_uptrend_klines(n=10)
+        assert detect_s2(klines, 9) is None
+
+
+class TestDetectS3:
+    def test_insufficient_data(self):
+        klines = generate_uptrend_klines(n=10)
+        assert detect_s3(klines, 9) is None
+
+
+class TestAnalyzeKirinPhase:
+    def test_insufficient_data(self):
+        klines = generate_uptrend_klines(n=10)
+        result = analyze_kirin_phase(klines)
+        assert result["phase"] == "UNKNOWN"
+
+    def test_uptrend_phase(self):
+        """上升趋势中应判断为拉升或吸筹"""
+        klines = generate_uptrend_klines(n=60, start_price=100.0, daily_pct=1.5)
+        result = analyze_kirin_phase(klines)
+        assert result["phase"] in ("拉升", "吸筹", "UNKNOWN")
+        assert 0 <= result["confidence"] <= 1
 
 
 class TestDetectPinghang:
