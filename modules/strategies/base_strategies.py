@@ -3,13 +3,17 @@ from .core import StrategyType, StrategySignal, Priority, Action, _calc_kdj, _ca
 
 def detect_b1(klines: List[Dict], index: int) -> Optional[StrategySignal]:
     """
-    检测 B1 买点
+    检测 B1 买点（已升级 MDC 多维验证）
 
-    B1 条件：
-    1. J < -10（核心条件）
+    B1 核心条件：
+    1. J < -10
     2. 缩量回调（最佳）
-    3. 价格在 BBI 下方或附近
-    4. 非绿砖状态（连续下跌）
+    3. 非绿砖状态（连续下跌 < 4天）
+
+    MDC 加分项：
+    - 价格触及或低于布林下轨 (+15%)
+    - 主力大单净流入为正 (+10%)
+    - RSI6 < 20 (极度超卖, +10%)
     """
     if index < 10:
         return None
@@ -17,66 +21,81 @@ def detect_b1(klines: List[Dict], index: int) -> Optional[StrategySignal]:
     today = klines[index]
     k, d, j = _calc_kdj(klines[:index+1])
 
-    # 核心条件：J < -10
+    # 1. 核心条件判断
     if j >= -10:
         return None
 
-    # 最佳条件：缩量回调
-    is_suoliang = today['is_suoliang']
-
     # 检查是否在连续下跌中（绿砖状态）
-    # 绿砖：连续4根阴线
     recent_4 = klines[index-3:index+1]
     yin_count = sum(1 for k in recent_4 if k['is_yinxian'])
+    if yin_count >= 4: # 强力绿砖，不建议入场
+        return None
 
-    # B1 买点
-    bbi = _calc_bbi(klines[:index+1])
-    price = today['close']
+    # 2. 基础置信度
+    is_suoliang = today['is_suoliang']
+    confidence = 0.6 + (0.1 if is_suoliang else 0)
+    
+    mdc_details = []
 
-    # 计算止损位
-    stop_loss = today['low']
+    # 3. MDC 验证 - 布林带 (超跌验证)
+    if today.get('boll_lower') and today['close'] <= today['boll_lower'] * 1.02:
+        confidence += 0.15
+        mdc_details.append("触及布林下轨(超跌)")
+
+    # 4. MDC 验证 - 资金流 (主力意图)
+    if today.get('large_inflow', 0) > today.get('large_outflow', 0):
+        confidence += 0.10
+        mdc_details.append("主力大单净流入")
+        
+    # 5. MDC 验证 - RSI (极端超卖)
+    if today.get('rsi6', 50) < 25:
+        confidence += 0.05
+        mdc_details.append("RSI极端超卖")
+
+    confidence = min(confidence, 0.95)
 
     return StrategySignal(
         ts_code=today['ts_code'],
         trade_date=today['trade_date'],
         strategy=StrategyType.B1,
-        confidence=0.8 if is_suoliang else 0.6,
-        description=f"B1买点 J={j:.2f}" + (" 缩量回调" if is_suoliang else ""),
+        confidence=round(confidence, 2),
+        description=f"B1买点 J={j:.2f} " + ", ".join(mdc_details),
         details={
-            'j': j,
-            'k': k,
-            'd': d,
+            'j': j, 'k': k, 'd': d,
             'is_suoliang': is_suoliang,
             'yin_count_4': yin_count,
-            'bbi': bbi,
-            'price': price,
+            'price': today['close'],
+            'mdc': mdc_details
         },
         action=Action.BUY.value,
-        stop_loss=stop_loss,
+        stop_loss=today['low'],
         priority=Priority.OPPORTUNITY)
 
 
 def detect_b2(klines: List[Dict], index: int) -> Optional[StrategySignal]:
     """
-    检测 B2 买点
+    检测 B2 买点（已升级 MDC 多维验证）
 
     B2 条件（B1后的确认信号）：
     1. 前几日有B1（J<-10）
     2. 放量长阳（涨幅>=4%）
     3. J值拐头（>-10）
-    4. 无上影线最好
+
+    MDC 加分项：
+    - 有效突破布林中轨 (+15%)
+    - 主力大单净流入比例高 (+15%)
+    - 布林开口向上 (+10%)
     """
     if index < 15:
         return None
 
     today = klines[index]
+    yesterday = klines[index-1]
 
-    # 检查是否有B1在前几日
+    # 1. 核心条件：检查是否有B1在前几日
     has_b1 = False
-    prev_j_list = []
     for i in range(5, min(15, index)):
         pk, pd, pj = _calc_kdj(klines[:index-i+1])
-        prev_j_list.append(pj)
         if pj < -10:
             has_b1 = True
             break
@@ -89,33 +108,53 @@ def detect_b2(klines: List[Dict], index: int) -> Optional[StrategySignal]:
     pct_chg = today['pct_chg']
     is_long_yang = pct_chg >= 4
 
-    # 无上影线
-    has_upper_shadow = today['high'] > today['close'] * 1.01
-
     if not (is_long_yang and is_beidou):
         return None
 
-    # 计算J值
+    # 2. 基础置信度
     k, d, j = _calc_kdj(klines[:index+1])
+    confidence = 0.70
+    mdc_details = []
 
-    # B2 确认
-    stop_loss = today['low']
+    # 3. MDC 验证 - 布林带 (突破验证)
+    if today.get('boll_mid') and yesterday['close'] < yesterday['boll_mid'] and today['close'] > today['boll_mid']:
+        confidence += 0.15
+        mdc_details.append("突破布林中轨(走强)")
+        
+    if today.get('boll_upper') and today.get('boll_lower'):
+        # 简单判断开口：width 增加
+        today_width = (today['boll_upper'] - today['boll_lower']) / today['boll_mid'] if today['boll_mid'] else 0
+        prev_width = (yesterday['boll_upper'] - yesterday['boll_lower']) / yesterday['boll_mid'] if yesterday['boll_mid'] else 0
+        if today_width > prev_width * 1.05:
+            confidence += 0.05
+            mdc_details.append("布林开口向上")
+
+    # 4. MDC 验证 - 资金流 (强力买入)
+    total_amount = today['amount']
+    net_inflow = today.get('large_inflow', 0) - today.get('large_outflow', 0)
+    if net_inflow > 0 and total_amount > 0:
+        inflow_ratio = net_inflow / total_amount
+        if inflow_ratio > 0.05: # 大单净占比 > 5%
+            confidence += 0.15
+            mdc_details.append(f"主力大单强力净流入({inflow_ratio*100:.1f}%)")
+
+    confidence = min(confidence, 0.98)
 
     return StrategySignal(
         ts_code=today['ts_code'],
         trade_date=today['trade_date'],
         strategy=StrategyType.B2,
-        confidence=0.85 if not has_upper_shadow else 0.75,
-        description=f"B2确认 涨{pct_chg:.2f}% J={j:.2f}",
+        confidence=round(confidence, 2),
+        description=f"B2确认 涨{pct_chg:.2f}% " + ", ".join(mdc_details),
         details={
             'j': j,
             'pct_chg': pct_chg,
             'is_beidou': is_beidou,
-            'has_upper_shadow': has_upper_shadow,
             'price': today['close'],
+            'mdc': mdc_details
         },
         action=Action.BUY.value,
-        stop_loss=stop_loss,
+        stop_loss=today['low'],
         priority=Priority.OPPORTUNITY)
 
 
