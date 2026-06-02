@@ -254,7 +254,7 @@ pip install -e .
 ### 运行测试
 
 ```bash
-# 全部测试（预期：261 passed, 1 skipped）
+# 全部测试（预期：367 passed, 10 skipped）
 python -m pytest tests/ -v
 
 # 单文件测试
