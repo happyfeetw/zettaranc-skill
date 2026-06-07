@@ -1313,21 +1313,25 @@ class TestAbcStages:
         for i in range(25):
             prev = price
             price *= 0.97  # 连续下跌
-            klines.append(make_kline(
-                price=price,
-                vol=8000.0 - i * 100,
-                prev_close=prev,
-                date=f"2026{i // 28 + 1:02d}{i % 28 + 1:02d}",
-            ))
+            klines.append(
+                make_kline(
+                    price=price,
+                    vol=8000.0 - i * 100,
+                    prev_close=prev,
+                    date=f"2026{i // 28 + 1:02d}{i % 28 + 1:02d}",
+                )
+            )
 
         # 最后5天缩量横盘 + 小幅回升
         for i in range(25, 35):
-            klines.append(make_kline(
-                price=price * (1 + (i - 25) * 0.001),
-                vol=3000.0,  # 缩量
-                prev_close=price,
-                date=f"2026{i // 28 + 1:02d}{i % 28 + 1:02d}",
-            ))
+            klines.append(
+                make_kline(
+                    price=price * (1 + (i - 25) * 0.001),
+                    vol=3000.0,  # 缩量
+                    prev_close=price,
+                    date=f"2026{i // 28 + 1:02d}{i % 28 + 1:02d}",
+                )
+            )
 
         result = detect_abc_stages(klines)
         assert result["a_score"] > 0

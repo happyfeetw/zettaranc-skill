@@ -951,8 +951,8 @@ class TestDetectTopPinwheel:
         # 阴线，实体=0.01，上下影线 > 实体×2
         klines[-1]["open"] = recent_high * 0.985
         klines[-1]["close"] = recent_high * 0.975  # 阴线
-        klines[-1]["high"] = recent_high * 1.02    # 长上影线
-        klines[-1]["low"] = recent_high * 0.95     # 长下影线
+        klines[-1]["high"] = recent_high * 1.02  # 长上影线
+        klines[-1]["low"] = recent_high * 0.95  # 长下影线
 
         signal = detect_top_pinwheel(klines, len(klines) - 1)
         assert signal is not None
@@ -991,8 +991,8 @@ class TestDetectTopPinwheel:
         recent_high = max(k["high"] for k in klines[-20:])
         klines[-1]["open"] = recent_high * 0.99
         klines[-1]["close"] = recent_high * 0.97  # 阴线，实体=0.02
-        klines[-1]["high"] = recent_high * 0.995   # 上影=0.005，太短
-        klines[-1]["low"] = recent_high * 0.96     # 下影=0.01，太短
+        klines[-1]["high"] = recent_high * 0.995  # 上影=0.005，太短
+        klines[-1]["low"] = recent_high * 0.96  # 下影=0.01，太短
 
         signal = detect_top_pinwheel(klines, len(klines) - 1)
         assert signal is None

@@ -472,7 +472,7 @@ def detect_top_pinwheel(klines: list[dict], index: int) -> StrategySignal | None
     today = klines[index]
 
     # 1. 高位判断：当前价在近20天最高价附近（距高点<5%）
-    recent_high = max(k["high"] for k in klines[index - 19:index + 1])
+    recent_high = max(k["high"] for k in klines[index - 19 : index + 1])
     if today["close"] < recent_high * 0.95:
         return None
 

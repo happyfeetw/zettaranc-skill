@@ -2093,7 +2093,7 @@ def detect_key_candle_coverage(klines: list[DailyData]) -> dict:
             continue
 
         # 取该天之前的10天窗口（用于计算均量）
-        recent_10 = klines[max(0, i - 10):i]
+        recent_10 = klines[max(0, i - 10) : i]
         if len(recent_10) < 5:
             continue
 
@@ -2135,7 +2135,7 @@ def detect_key_candle_coverage(klines: list[DailyData]) -> dict:
     today = klines[-1]
 
     # 判断方向
-    pre_window = klines[max(0, key_idx - 20):key_idx]
+    pre_window = klines[max(0, key_idx - 20) : key_idx]
     if pre_window:
         high_20 = max(w.high for w in pre_window)
         low_20 = min(w.low for w in pre_window)
@@ -2159,7 +2159,7 @@ def detect_key_candle_coverage(klines: list[DailyData]) -> dict:
     # 关键K之后是否缩量洗盘（量能递减）
     volume_shrinking = False
     if key_idx < len(klines) - 1:
-        post_klines = klines[key_idx + 1:]
+        post_klines = klines[key_idx + 1 :]
         if len(post_klines) >= 2:
             shrinking = True
             for j in range(1, len(post_klines)):
@@ -2231,7 +2231,7 @@ def detect_abc_stages(klines: list[DailyData]) -> dict:
     # 检查近10天内J值是否曾经<0
     j_was_negative = False
     for i in range(max(0, len(klines) - 10), len(klines)):
-        slice_k = klines[max(0, i - 8):i + 1]
+        slice_k = klines[max(0, i - 8) : i + 1]
         if len(slice_k) >= 9:
             _, _, j = calculate_kdj(slice_k)
             if j < 0:
